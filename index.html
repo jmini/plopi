@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Plopi</title>
+<meta name="description" content="Mini-jeux pour enfants, sans publicité.">
+<meta name="theme-color" content="#B9A8FF">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Plopi">
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #FAF9FF; overscroll-behavior: none; touch-action: manipulation; }
+  @media (prefers-color-scheme: dark) { html, body { background: #1B1F3B; } }
+  #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
+    background: #B9A8FF; font-family: system-ui, sans-serif; color: #1B1F3B; z-index: 10; }
+  #loading .mark { width: 116px; height: 116px; border-radius: 30px; background: #1B1F3B; animation: breathe 1.6s ease-in-out infinite; }
+  #loading p { margin: 0; font-size: 18px; font-weight: 700; }
+  @keyframes breathe { 50% { transform: scale(1.05); } }
+  @media (prefers-reduced-motion: reduce) { #loading .mark { animation: none; } }
+  #unsupported { display: none; max-width: 420px; padding: 24px; text-align: center; line-height: 1.5; }
+</style>
+</head>
+<body>
+<div id="loading">
+  <div class="mark" aria-hidden="true">
+    <svg viewBox="0 0 100 100" width="116" height="116"><circle cx="44" cy="56" r="26" fill="#B9A8FF"/><path d="M30 50 A15 15 0 0 1 40 38" fill="none" stroke="#FFFFFF" stroke-width="5" stroke-linecap="round"/><circle cx="74" cy="32" r="9" fill="#FFB89A"/><path d="M74 17 V12 M84 22 L88 18 M89 32 H94" fill="none" stroke="#FFB89A" stroke-width="4" stroke-linecap="round"/><circle cx="78" cy="58" r="5" fill="#9EE6C9"/></svg>
+  </div>
+  <p id="loading-text">Plopi</p>
+  <div id="unsupported">
+    <p lang="fr">Ce navigateur est trop ancien pour Plopi. Mettez à jour l'appareil (iOS 18.2 ou plus récent, ou un navigateur récent).</p>
+    <p lang="en">This browser is too old for Plopi. Please update the device (iOS 18.2 or newer, or a recent browser).</p>
+    <p lang="de">Dieser Browser ist zu alt für Plopi. Bitte aktualisieren Sie das Gerät (iOS 18.2 oder neuer, oder ein aktueller Browser).</p>
+  </div>
+</div>
+<script>
+  // The full mode needs WebAssembly GC (Safari 18.2+, Chrome 119+, Firefox 120+). This tiny module
+  // declares a GC struct type: it only validates where GC is supported. The simplified Kotlin/JS
+  // mode planned for older iPads would be loaded here instead.
+  var gc = typeof WebAssembly === 'object' && WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]));
+  if (gc) {
+    var s = document.createElement('script'); s.src = 'plopi.js'; document.body.appendChild(s);
+  } else {
+    document.getElementById('loading-text').style.display = 'none';
+    document.getElementById('unsupported').style.display = 'block';
+    document.querySelector('#loading .mark').style.animation = 'none';
+  }
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
+</script>
+</body>
+</html>
