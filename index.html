@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Plopi">
 <style>
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #FAF9FF; overscroll-behavior: none; touch-action: manipulation; }
+  html, body { margin: 0; height: 100%; height: 100dvh; overflow: hidden; background: #FAF9FF; overscroll-behavior: none; touch-action: manipulation; }
   @media (prefers-color-scheme: dark) { html, body { background: #1B1F3B; } }
   #loading { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 20px;
     background: #B9A8FF; font-family: system-ui, sans-serif; color: #1B1F3B; z-index: 10; }
@@ -22,7 +22,9 @@
   #loading p { margin: 0; font-size: 18px; font-weight: 700; }
   @keyframes breathe { 50% { transform: scale(1.05); } }
   @media (prefers-reduced-motion: reduce) { #loading .mark { animation: none; } }
-  #unsupported { display: none; max-width: 420px; padding: 24px; text-align: center; line-height: 1.5; }
+  #unsupported, #failed { display: none; max-width: 420px; padding: 24px; text-align: center; line-height: 1.5; }
+  #failed code { display: block; margin-top: 12px; padding: 10px; border-radius: 10px; background: rgba(27,31,59,.1); font-size: 12px; text-align: left; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
+  #failed a, #unsupported a { color: #1B1F3B; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -35,20 +37,58 @@
     <p lang="fr">Ce navigateur est trop ancien pour Plopi. Mettez à jour l'appareil (iOS 18.2 ou plus récent, ou un navigateur récent).</p>
     <p lang="en">This browser is too old for Plopi. Please update the device (iOS 18.2 or newer, or a recent browser).</p>
     <p lang="de">Dieser Browser ist zu alt für Plopi. Bitte aktualisieren Sie das Gerät (iOS 18.2 oder neuer, oder ein aktueller Browser).</p>
+    <p><a href="diag.html">Diagnostic</a></p>
+  </div>
+  <div id="failed">
+    <p lang="fr">Plopi n'a pas pu se lancer sur cet appareil.</p>
+    <p lang="en">Plopi could not start on this device.</p>
+    <p lang="de">Plopi konnte auf diesem Gerät nicht starten.</p>
+    <p><a href="diag.html">Diagnostic</a> · <a href="./" onclick="location.reload(); return false">↻</a></p>
+    <code id="failed-detail"></code>
   </div>
 </div>
 <script>
   // The full mode needs WebAssembly GC (Safari 18.2+, Chrome 119+, Firefox 120+). This tiny module
   // declares a GC struct type: it only validates where GC is supported. The simplified Kotlin/JS
   // mode planned for older iPads would be loaded here instead.
+  // Never stay on a blank screen: any start-up error, or a start that takes far too long, shows a
+  // message with the error text and a link to the diagnostic page. Compose removes #loading once it
+  // has drawn, after which these handlers do nothing.
+  function plopiFailed(detail) {
+    if (!document.getElementById('loading')) return;
+    document.getElementById('loading-text').style.display = 'none';
+    document.querySelector('#loading .mark').style.animation = 'none';
+    document.getElementById('failed').style.display = 'block';
+    var d = document.getElementById('failed-detail');
+    var text = String(detail).slice(0, 600);
+    if (d.textContent.indexOf(text) < 0) d.textContent = (d.textContent ? d.textContent + '\n' : '') + text;
+  }
+  window.addEventListener('error', function (e) { plopiFailed(e.error ? describe(e.error) : (e.message || 'error')); });
+  function describe(r) {
+    if (!r) return 'unknown';
+    if (typeof r !== 'object') return String(r);
+    return (r.name || 'Error') + ': ' + (r.message || '') + (r.stack ? '\n' + String(r.stack).split('\n').slice(0, 3).join('\n') : '');
+  }
+  window.addEventListener('unhandledrejection', function (e) { plopiFailed(describe(e.reason)); });
+  setTimeout(function () { plopiFailed('timeout (45 s)'); }, 45000);
+
   var gc = typeof WebAssembly === 'object' && WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]));
   if (gc) {
-    var s = document.createElement('script'); s.src = 'plopi.js'; document.body.appendChild(s);
+    var s = document.createElement('script'); s.src = 'plopi.js'; s.onerror = function () { plopiFailed('plopi.js not loaded'); }; document.body.appendChild(s);
   } else {
     document.getElementById('loading-text').style.display = 'none';
     document.getElementById('unsupported').style.display = 'block';
     document.querySelector('#loading .mark').style.animation = 'none';
   }
+  // Sound needs an AudioContext created or resumed during a touch on iOS: do it on the first one.
+  function unlockAudio() {
+    try {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (C && !window.plopiAudio) window.plopiAudio = new C();
+      if (window.plopiAudio && window.plopiAudio.state === 'suspended') window.plopiAudio.resume();
+    } catch (e) {}
+  }
+  document.addEventListener('pointerdown', unlockAudio, { capture: true });
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
   }

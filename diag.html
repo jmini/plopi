@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plopi · diagnostic</title>
+<style>
+  body { margin: 0; padding: 20px; font-family: system-ui, sans-serif; background: #FAF9FF; color: #1B1F3B; }
+  h1 { font-size: 22px; } table { border-collapse: collapse; width: 100%; max-width: 720px; }
+  td { padding: 8px; border-bottom: 1px solid #E3E2F0; vertical-align: top; font-size: 14px; }
+  td:first-child { font-weight: 700; white-space: nowrap; } .ok { color: #1E7A4E; } .ko { color: #B42318; }
+  button { margin: 16px 0; min-height: 48px; padding: 0 22px; border: none; border-radius: 24px; background: #1B1F3B; color: #fff; font-size: 16px; font-weight: 700; }
+  pre { white-space: pre-wrap; font-size: 12px; background: #EEEDF8; padding: 12px; border-radius: 12px; max-width: 720px; }
+</style>
+</head>
+<body>
+<h1>Plopi · diagnostic</h1>
+<p>Envoyez une capture de cette page (ou le texte copié) à la personne qui développe Plopi.</p>
+<table id="t"></table>
+<button id="copy">Copier les résultats</button>
+<pre id="raw"></pre>
+<script>
+// Checks, one by one, what the full (Kotlin/Wasm + Compose) mode needs, so a device that fails to
+// start Plopi can tell why. Each check is independent; a failing one never stops the others.
+const rows = [];
+function row(name, ok, detail) {
+  rows.push(`${ok === true ? 'OK ' : ok === false ? 'KO ' : '-- '} ${name}: ${detail ?? ''}`);
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td>${name}</td><td class="${ok === true ? 'ok' : ok === false ? 'ko' : ''}">${ok === true ? '✓' : ok === false ? '✗' : '·'} ${String(detail ?? '').replace(/</g, '&lt;')}</td>`;
+  document.getElementById('t').appendChild(tr);
+  document.getElementById('raw').textContent = rows.join('\n');
+}
+const v = (bytes) => { try { return WebAssembly.validate(new Uint8Array(bytes)); } catch (e) { return false; } };
+const hdr = [0, 97, 115, 109, 1, 0, 0, 0];
+(async () => {
+  row('User agent', null, navigator.userAgent);
+  row('Mémoire appareil', null, (navigator.deviceMemory ? navigator.deviceMemory + ' Go' : 'inconnue') + ', ' + (navigator.hardwareConcurrency || '?') + ' cœurs');
+  row('Écran', null, `${screen.width}×${screen.height} @${devicePixelRatio}x`);
+  row('WebAssembly', typeof WebAssembly === 'object', typeof WebAssembly);
+  if (typeof WebAssembly !== 'object') row('Indice', false, 'WebAssembly absent : mode Isolement (Lockdown) activé ? Réglages > Confidentialité > Mode Isolement, exclure ce site.');
+  row('Wasm GC', v([...hdr, 1, 5, 1, 95, 1, 120, 0]));
+  // try/catch of the legacy exception-handling proposal: what the Kotlin/Wasm build uses (required).
+  row('Exceptions (legacy, requis)', v([...hdr, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 13, 3, 1, 0, 0, 10, 11, 1, 9, 0, 6, 64, 8, 0, 7, 0, 11, 11]));
+  // try_table / exnref, the newer proposal (not needed by the current build; informative).
+  row('Exceptions (exnref)', v([...hdr, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 13, 3, 1, 0, 0, 10, 16, 1, 14, 0, 2, 64, 31, 64, 1, 0, 0, 0, 8, 0, 11, 11, 11]));
+  row('Tail calls', v([...hdr, 1, 4, 1, 96, 0, 0, 3, 2, 1, 0, 10, 6, 1, 4, 0, 18, 0, 11]));
+  try {
+    const gl = document.createElement('canvas').getContext('webgl2');
+    row('WebGL2', !!gl, gl ? (gl.getParameter(gl.VERSION) + ' · max texture ' + gl.getParameter(gl.MAX_TEXTURE_SIZE)) : 'indisponible');
+  } catch (e) { row('WebGL2', false, e.message); }
+  for (const mb of [256, 512, 1024]) {
+    try { const m = new WebAssembly.Memory({ initial: mb * 16 }); row(`Mémoire Wasm ${mb} Mo`, true, m.buffer.byteLength / 1048576 + ' Mo'); }
+    catch (e) { row(`Mémoire Wasm ${mb} Mo`, false, e.message); }
+  }
+  row('Service worker', 'serviceWorker' in navigator, navigator.serviceWorker && navigator.serviceWorker.controller ? 'actif (une ancienne version peut être en cache)' : 'non actif');
+  try {
+    const keys = await caches.keys(); row('Caches', null, keys.join(', ') || 'aucun');
+  } catch (e) { row('Caches', null, e.message); }
+  // Download and compile each .wasm of the build, the step most likely to run out of memory.
+  try {
+    const js = await (await fetch('plopi.js', { cache: 'no-store' })).text();
+    const files = [...new Set(js.match(/[0-9a-f]{20}\.wasm/g) || [])];
+    for (const f of files) {
+      const t0 = performance.now();
+      try {
+        const bytes = await (await fetch(f)).arrayBuffer();
+        await WebAssembly.compile(bytes);
+        row('Compilation ' + f, true, `${(bytes.byteLength / 1048576).toFixed(1)} Mo en ${Math.round(performance.now() - t0)} ms`);
+      } catch (e) { row('Compilation ' + f, false, e.message); }
+    }
+    if (!files.length) row('Fichiers .wasm', false, 'introuvables dans plopi.js');
+  } catch (e) { row('plopi.js', false, e.message); }
+  row('Fin', null, new Date().toISOString());
+})();
+document.getElementById('copy').onclick = () => navigator.clipboard.writeText(rows.join('\n')).then(() => { document.getElementById('copy').textContent = 'Copié ✓'; });
+</script>
+</body>
+</html>
