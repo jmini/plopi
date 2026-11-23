@@ -25,6 +25,16 @@
   #unsupported, #failed { display: none; max-width: 420px; padding: 24px; text-align: center; line-height: 1.5; }
   #failed code { display: block; margin-top: 12px; padding: 10px; border-radius: 10px; background: rgba(27,31,59,.1); font-size: 12px; text-align: left; white-space: pre-wrap; word-break: normal; overflow-wrap: anywhere; }
   #failed a, #unsupported a { color: #1B1F3B; font-weight: 700; }
+  /* After start-up an error cannot use the loading screen any more: a banner over the app instead. */
+  #late-error { position: fixed; left: 12px; right: 12px; bottom: 12px; z-index: 20; padding: 14px 16px; border-radius: 16px;
+    background: #FFE9E3; color: #1B1F3B; font: 14px/1.4 system-ui, sans-serif; box-shadow: 0 4px 20px rgba(27,31,59,.25); }
+  #late-error code { display: block; margin-top: 8px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow: auto; }
+  #late-error a { color: #1B1F3B; font-weight: 700; }
+  /* ?diag=1: what the renderer is doing, drawn in plain HTML over the app. */
+  #diag-panel { position: fixed; top: 8px; right: 8px; z-index: 30; width: min(420px, calc(100vw - 16px)); max-height: 70vh; overflow: auto;
+    padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.95); color: #1B1F3B; border: 2px solid #1B1F3B;
+    font: 11px/1.35 ui-monospace, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #diag-panel button { font: 700 13px system-ui, sans-serif; padding: 6px 12px; margin: 0 6px 8px 0; border-radius: 10px; border: 2px solid #1B1F3B; background: #fff; }
 </style>
 </head>
 <body>
@@ -54,14 +64,55 @@
   // Never stay on a blank screen: any start-up error, or a start that takes far too long, shows a
   // message with the error text and a link to the diagnostic page. Compose removes #loading once it
   // has drawn, after which these handlers do nothing.
+  // A short log of what happened (errors, console errors and warnings, WebGL contexts), kept for
+  // the diagnostic panel (?diag=1) and the error messages.
+  window.plopiLog = [];
+  function plog(text) {
+    plopiLog.push((performance.now() / 1000).toFixed(2) + 's ' + String(text).slice(0, 400));
+    if (plopiLog.length > 120) plopiLog.shift();
+  }
+  ['error', 'warn'].forEach(function (k) {
+    var original = console[k];
+    console[k] = function () {
+      try { plog(k + ': ' + Array.prototype.map.call(arguments, String).join(' ')); } catch (e) {}
+      return original.apply(console, arguments);
+    };
+  });
+  // Record every WebGL context the renderer asks for, and report a lost one: a lost context draws nothing.
+  window.plopiCanvases = [];
+  var getContext0 = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+    var ctx = getContext0.apply(this, arguments);
+    if (/webgl/.test(type) && !this.__plopi) {
+      this.__plopi = true;
+      plog('getContext ' + type + ' ' + JSON.stringify(attrs || {}) + ' -> ' + (ctx ? 'ok' : 'null'));
+      if (ctx) plopiCanvases.push({ canvas: this, gl: ctx });
+      else plopiFailed('WebGL: getContext(' + type + ') returned null');
+      this.addEventListener('webglcontextlost', function () { plog('webglcontextlost'); plopiFailed('WebGL context lost'); });
+      this.addEventListener('webglcontextrestored', function () { plog('webglcontextrestored'); });
+    }
+    return ctx;
+  };
   function plopiFailed(detail) {
-    if (!document.getElementById('loading')) return;
+    plog('FAILED ' + detail);
+    if (!document.getElementById('loading')) { lateError(detail); return; }
     document.getElementById('loading-text').style.display = 'none';
     document.querySelector('#loading .mark').style.animation = 'none';
     document.getElementById('failed').style.display = 'block';
     var d = document.getElementById('failed-detail');
     var text = String(detail).slice(0, 600);
     if (d.textContent.indexOf(text) < 0) d.textContent = (d.textContent ? d.textContent + '\n' : '') + text;
+  }
+  function lateError(detail) {
+    var box = document.getElementById('late-error');
+    if (!box) {
+      box = document.createElement('div');
+      box.id = 'late-error';
+      box.innerHTML = '<b>Plopi a rencontré un problème.</b> <a href="./" onclick="location.reload(); return false">↻</a> · <a href="diag.html">Diagnostic</a><code></code>';
+      document.body.appendChild(box);
+    }
+    var code = box.querySelector('code');
+    code.textContent = (code.textContent ? code.textContent + '\n' : '') + String(detail).slice(0, 600);
   }
   window.addEventListener('error', function (e) { plopiFailed(e.error ? describe(e.error) : (e.message || 'error')); });
   function describe(r) {
@@ -89,6 +140,55 @@
     } catch (e) {}
   }
   document.addEventListener('pointerdown', unlockAudio, { capture: true });
+  if (/[?&]diag=1/.test(location.search)) startDiagPanel();
+  function startDiagPanel() {
+    // Count draw calls per second: zero means the renderer is not drawing at all.
+    var draws = 0, clears = 0;
+    var proto = window.WebGL2RenderingContext && WebGL2RenderingContext.prototype;
+    if (proto) ['drawElements', 'drawArrays', 'drawArraysInstanced', 'drawElementsInstanced'].forEach(function (m) {
+      var f = proto[m]; if (f) proto[m] = function () { draws++; return f.apply(this, arguments); };
+    });
+    if (proto) { var c0 = proto.clear; proto.clear = function () { clears++; return c0.apply(this, arguments); }; }
+    var panel, lastDraws = 0, lastClears = 0, rate = '', frames = 0;
+    (function raf() { frames++; requestAnimationFrame(raf); })();
+    function report() {
+      var lines = [];
+      lines.push(navigator.userAgent);
+      lines.push('window ' + innerWidth + '×' + innerHeight + ' @' + devicePixelRatio + 'x · visual ' + (window.visualViewport ? Math.round(visualViewport.width) + '×' + Math.round(visualViewport.height) : '?') + ' · ' + document.visibilityState);
+      lines.push('loading screen: ' + (document.getElementById('loading') ? 'still there' : 'removed') + ' · rAF frames ' + frames);
+      lines.push('draw calls/s ' + rate);
+      plopiCanvases.forEach(function (x, i) {
+        var c = x.canvas, r = c.getBoundingClientRect(), gl = x.gl, cs = getComputedStyle(c);
+        lines.push('canvas ' + i + ': buffer ' + c.width + '×' + c.height + ' · css ' + Math.round(r.width) + '×' + Math.round(r.height) + ' at ' + Math.round(r.left) + ',' + Math.round(r.top) +
+          ' · lost ' + gl.isContextLost() + ' · drawing buffer ' + gl.drawingBufferWidth + '×' + gl.drawingBufferHeight + ' · display ' + cs.display + ' · visibility ' + cs.visibility + ' · opacity ' + cs.opacity);
+        try {
+          var dbg = gl.getExtension('WEBGL_debug_renderer_info');
+          lines.push('  GPU ' + (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)) + ' · max renderbuffer ' + gl.getParameter(gl.MAX_RENDERBUFFER_SIZE) + ' · viewport ' + gl.getParameter(gl.MAX_VIEWPORT_DIMS).join('×'));
+          lines.push('  attrs ' + JSON.stringify(gl.getContextAttributes()));
+        } catch (e) { lines.push('  ' + e); }
+      });
+      if (!plopiCanvases.length) lines.push('no WebGL canvas created');
+      var top = document.elementFromPoint(innerWidth / 2, innerHeight / 2);
+      lines.push('element at centre: ' + (top ? top.tagName + (top.id ? '#' + top.id : '') : 'none'));
+      lines.push('--- log');
+      return lines.concat(plopiLog).join('\n');
+    }
+    function render() {
+      if (!panel) {
+        panel = document.createElement('div'); panel.id = 'diag-panel';
+        panel.innerHTML = '<button id="diag-copy">Copier</button><button id="diag-hide">Masquer</button><div id="diag-text"></div>';
+        document.body.appendChild(panel);
+        panel.querySelector('#diag-copy').onclick = function () { navigator.clipboard && navigator.clipboard.writeText(report()); };
+        panel.querySelector('#diag-hide').onclick = function () { panel.style.display = 'none'; };
+      }
+      panel.querySelector('#diag-text').textContent = report();
+    }
+    setInterval(function () {
+      rate = (draws - lastDraws) + ' draws, ' + (clears - lastClears) + ' clears · since start ' + draws + ' draws, ' + clears + ' clears';
+      lastDraws = draws; lastClears = clears;
+      if (document.body) render();
+    }, 1000);
+  }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
   }
