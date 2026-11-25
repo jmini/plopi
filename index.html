@@ -121,7 +121,8 @@
     return (r.name || 'Error') + ': ' + (r.message || '') + (r.stack ? '\n' + String(r.stack).split('\n').slice(0, 3).join('\n') : '');
   }
   window.addEventListener('unhandledrejection', function (e) { plopiFailed(describe(e.reason)); });
-  setTimeout(function () { plopiFailed('timeout (45 s)'); }, 45000);
+  // Only a start-up that never finished is a failure: once the loading screen is gone, the app runs.
+  setTimeout(function () { if (document.getElementById('loading')) plopiFailed('timeout (45 s)'); }, 45000);
 
   var gc = typeof WebAssembly === 'object' && WebAssembly.validate(new Uint8Array([0,97,115,109,1,0,0,0,1,5,1,95,1,120,0]));
   if (gc) {
@@ -192,6 +193,25 @@
   if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
   }
+  // An app installed on a phone is rarely restarted: Android brings back the same page for days.
+  // Each time it comes back to the foreground, ask the site which version it serves; when it is not
+  // the one running, reload. The game in progress is saved after every move, so nothing is lost,
+  // and the child sees a reload at the moment the app reappears rather than in the middle of play.
+  function plopiCheckUpdate() {
+    if (!window.plopiVersion || location.protocol === 'file:') return;
+    fetch('version.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (v) {
+      if (!v || !v.version || v.version === window.plopiVersion) return;
+      // One attempt per version: should the reload still bring the old app, do not loop.
+      try { if (sessionStorage.getItem('plopiUpdateTried') === v.version) return; sessionStorage.setItem('plopiUpdateTried', v.version); } catch (e) {}
+      plog('update ' + window.plopiVersion + ' -> ' + v.version);
+      var reload = function () { location.replace(location.pathname + location.search); };
+      navigator.serviceWorker && navigator.serviceWorker.getRegistration
+        ? navigator.serviceWorker.getRegistration().then(function (reg) { return reg && reg.update(); }).catch(function () {}).then(reload)
+        : reload();
+    }).catch(function () {});
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) plopiCheckUpdate(); });
+  window.addEventListener('pageshow', function (e) { if (e.persisted) plopiCheckUpdate(); });
 </script>
 </body>
 </html>

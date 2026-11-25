@@ -1,8 +1,10 @@
 // Offline support. The shell is precached on install; everything else (the content-hashed
 // .wasm files, fonts) is cached the first time it is fetched. The page and its loader script are
-// fetched network-first so an update arrives as soon as the device is online.
-const CACHE = 'plopi-v1';
-const SHELL = ['./', 'index.html', 'plopi.js', 'manifest.webmanifest', 'icons/favicon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png'];
+// fetched network-first so an update arrives as soon as the device is online. Network-first means
+// revalidating with the server (cache: 'no-cache'): the browser's HTTP cache would otherwise answer
+// with the previous page and loader for up to ten minutes after a publication.
+const CACHE = 'plopi-v2';
+const SHELL = ['./', 'index.html', 'plopi.js', 'version.json', 'manifest.webmanifest', 'icons/favicon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
@@ -16,9 +18,9 @@ self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET' || new URL(req.url).origin !== location.origin) return;
   const path = new URL(req.url).pathname;
-  const networkFirst = req.mode === 'navigate' || path.endsWith('/') || path.endsWith('index.html') || path.endsWith('plopi.js');
+  const networkFirst = req.mode === 'navigate' || path.endsWith('/') || path.endsWith('index.html') || path.endsWith('plopi.js') || path.endsWith('version.json');
   if (networkFirst) {
-    e.respondWith(fetch(req).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); return res; })
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(req, copy)); return res; })
       .catch(() => caches.match(req, { ignoreSearch: true }).then((r) => r || caches.match('index.html'))));
   } else {
     e.respondWith(caches.match(req).then((hit) => hit || fetch(req).then((res) => {
